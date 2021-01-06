@@ -1,37 +1,45 @@
 /*
- * Copyright 2016 EPAM Systems
+ * Copyright 2019 EPAM Systems
  *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This file is part of EPAM Report Portal.
- * https://github.com/reportportal/service-authorization
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Report Portal is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Report Portal is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Report Portal.  If not, see <http://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package com.epam.reportportal.auth.endpoint;
 
-import com.epam.reportportal.auth.OAuthSecurityConfig;
+import com.epam.reportportal.auth.integration.AuthIntegrationType;
+import com.epam.reportportal.auth.integration.parameter.SamlParameter;
 import com.epam.reportportal.auth.oauth.OAuthProvider;
-import com.epam.ta.reportportal.database.dao.ServerSettingsRepository;
-import com.epam.ta.reportportal.database.entity.settings.OAuth2LoginDetails;
+import com.epam.ta.reportportal.dao.IntegrationRepository;
+import com.epam.ta.reportportal.dao.IntegrationTypeRepository;
+import com.epam.ta.reportportal.dao.OAuthRegistrationRepository;
+import com.epam.ta.reportportal.entity.integration.Integration;
+import com.epam.ta.reportportal.entity.integration.IntegrationType;
+import com.epam.ta.reportportal.entity.oauth.OAuthRegistration;
+import com.google.common.collect.Maps;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.info.Info;
 import org.springframework.boot.actuate.info.InfoContributor;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
+import org.springframework.web.util.UriUtils;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static com.epam.reportportal.auth.config.SecurityConfiguration.GlobalWebSecurityConfig.SSO_LOGIN_PATH;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.springframework.web.servlet.support.ServletUriComponentsBuilder.fromCurrentContextPath;
 
 /**
@@ -42,60 +50,114 @@ import static org.springframework.web.servlet.support.ServletUriComponentsBuilde
 @Component
 public class AuthProvidersInfoContributor implements InfoContributor {
 
-    private final ServerSettingsRepository settingsRepository;
-    private final Map<String, OAuthProvider> providersMap;
+	private static final String SAML_BUTTON = "<span>Login with SAML</span>";
 
-    @Autowired
-    public AuthProvidersInfoContributor(ServerSettingsRepository settingsRepository,
-            Map<String, OAuthProvider> providersMap) {
-        this.settingsRepository = settingsRepository;
-        this.providersMap = providersMap;
-    }
+	@Value("${rp.auth.saml.prefix}")
+	private String samlPrefix;
 
-    @Override
-    public void contribute(Info.Builder builder) {
-        final Map<String, OAuth2LoginDetails> oauth2Details =
-                settingsRepository.findOne("default").getoAuth2LoginDetails();
+	private final OAuthRegistrationRepository oAuthRegistrationRepository;
+	private final IntegrationRepository integrationRepository;
+	private final IntegrationTypeRepository integrationTypeRepository;
+	private final Map<String, OAuthProvider> providersMap;
 
-        final Map<String, AuthProviderInfo> providers = providersMap.values()
-                .stream()
-                .filter(p -> !p.isConfigDynamic() || (null != oauth2Details && oauth2Details.containsKey(p.getName())))
-                .collect(Collectors
-                        .toMap(OAuthProvider::getName,
-                                p -> new AuthProviderInfo(p.getButton(), p.buildPath(getAuthBasePath()))));
+	@Autowired
+	public AuthProvidersInfoContributor(OAuthRegistrationRepository oAuthRegistrationRepository,
+			IntegrationRepository integrationRepository, IntegrationTypeRepository integrationTypeRepository,
+			Map<String, OAuthProvider> providersMap) {
+		this.oAuthRegistrationRepository = oAuthRegistrationRepository;
+		this.integrationRepository = integrationRepository;
+		this.integrationTypeRepository = integrationTypeRepository;
+		this.providersMap = providersMap;
+	}
 
-        builder.withDetail("auth_extensions", providers);
-        //@formatter:on
-    }
+	@Override
+	public void contribute(Info.Builder builder) {
+		final List<OAuthRegistration> oauth2Details = oAuthRegistrationRepository.findAll();
 
-    private String getAuthBasePath() {
-        return fromCurrentContextPath().path(OAuthSecurityConfig.SSO_LOGIN_PATH).build().getPath();
-    }
+		final Map<String, AuthProviderInfo> providers = providersMap.values()
+				.stream()
+				.filter(p -> !p.isConfigDynamic() || oauth2Details.stream().anyMatch(it -> it.getId().equalsIgnoreCase(p.getName())))
+				.collect(Collectors.toMap(OAuthProvider::getName,
+						p -> new OAuthProviderInfo(p.getButton(), p.buildPath(getAuthBasePath()))
+				));
 
-    public static class AuthProviderInfo {
-        private String button;
-        private String path;
+		Optional<IntegrationType> samlIntegrationType = integrationTypeRepository.findByName(AuthIntegrationType.SAML.getName());
 
-        public AuthProviderInfo(String button, String path) {
-            this.button = button;
-            this.path = path;
-        }
+		Map<String, String> samlProviders = Maps.newHashMap();
 
-        public String getButton() {
-            return button;
-        }
+		if (samlIntegrationType.isPresent()) {
+			samlProviders = integrationRepository.findAllGlobalByType(samlIntegrationType.get())
+					.stream()
+					.filter(Integration::isEnabled)
+					.filter(it -> SamlParameter.IDP_URL.getParameter(it).isPresent())
+					.collect(Collectors.toMap(
+							Integration::getName,
+							it -> fromCurrentContextPath().path(String.format("/%s/discovery?idp=%s",
+									samlPrefix,
+									UriUtils.encode(SamlParameter.IDP_URL.getParameter(it).get(), UTF_8.toString())
+							)).build().getPath()
+					));
+		}
 
-        public void setButton(String button) {
-            this.button = button;
-        }
+		if (!CollectionUtils.isEmpty(samlProviders)) {
+			providers.put("samlProviders", new SamlProviderInfo(SAML_BUTTON, samlProviders));
+		}
 
-        public String getPath() {
-            return path;
-        }
+		builder.withDetail("authExtensions", providers);
+	}
 
-        public void setPath(String path) {
-            this.path = path;
-        }
-    }
+	private String getAuthBasePath() {
+		return fromCurrentContextPath().path(SSO_LOGIN_PATH).build().getPath();
+	}
+
+	public abstract static class AuthProviderInfo {
+		private String button;
+
+		public AuthProviderInfo(String button) {
+			this.button = button;
+		}
+
+		public String getButton() {
+			return button;
+		}
+
+		public void setButton(String button) {
+			this.button = button;
+		}
+	}
+
+	public static class SamlProviderInfo extends AuthProviderInfo {
+		private Map<String, String> providers;
+
+		public SamlProviderInfo(String button, Map<String, String> providers) {
+			super(button);
+			this.providers = providers;
+		}
+
+		public Map<String, String> getProviders() {
+			return providers;
+		}
+
+		public void setProviders(Map<String, String> providers) {
+			this.providers = providers;
+		}
+	}
+
+	public static class OAuthProviderInfo extends AuthProviderInfo {
+		private String path;
+
+		public OAuthProviderInfo(String button, String path) {
+			super(button);
+			this.path = path;
+		}
+
+		public String getPath() {
+			return path;
+		}
+
+		public void setPath(String path) {
+			this.path = path;
+		}
+	}
 
 }

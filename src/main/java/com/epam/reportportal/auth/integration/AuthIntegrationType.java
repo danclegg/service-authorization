@@ -1,30 +1,34 @@
 /*
- * Copyright 2017 EPAM Systems
+ * Copyright 2019 EPAM Systems
  *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This file is part of EPAM Report Portal.
- * https://github.com/reportportal/service-authorization
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Report Portal is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Report Portal is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Report Portal.  If not, see <http://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package com.epam.reportportal.auth.integration;
 
-import com.epam.reportportal.auth.store.entity.AbstractAuthConfig;
-import com.epam.reportportal.auth.store.entity.AuthConfigEntity;
+import com.epam.reportportal.auth.integration.builder.ActiveDirectoryBuilder;
+import com.epam.reportportal.auth.integration.builder.AuthIntegrationBuilder;
+import com.epam.reportportal.auth.integration.builder.LdapBuilder;
+import com.epam.reportportal.auth.integration.builder.SamlBuilder;
+import com.epam.reportportal.auth.integration.converter.ActiveDirectoryConverter;
+import com.epam.reportportal.auth.integration.converter.LdapConverter;
+import com.epam.reportportal.auth.integration.converter.SamlConverter;
+import com.epam.ta.reportportal.entity.integration.Integration;
+import com.epam.ta.reportportal.ws.model.integration.auth.*;
 
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import static java.util.Optional.ofNullable;
 
@@ -33,43 +37,94 @@ import static java.util.Optional.ofNullable;
  */
 public enum AuthIntegrationType {
 
-    ACTIVE_DIRECTORY("ad", "activeDirectory") {
-        @Override
-        public Optional<AbstractAuthConfig> get(AuthConfigEntity entity) {
-            return ofNullable(entity).map(AuthConfigEntity::getActiveDirectory);
-        }
-    },
-    LDAP("ldap", "ldap") {
-        @Override
-        public Optional<AbstractAuthConfig> get(AuthConfigEntity entity) {
-            return ofNullable(entity).map(AuthConfigEntity::getLdap);
-        }
-    };
+	ACTIVE_DIRECTORY("ad") {
+		@Override
+		public Optional<Integration> get(Integration entity) {
+			return ofNullable(entity);
+		}
 
-    private String id;
-    private String dbField;
+		@Override
+		public AuthIntegrationBuilder getBuilder() {
+			return new ActiveDirectoryBuilder();
+		}
 
-    AuthIntegrationType(String id, String dbField) {
-        this.id = id;
-        this.dbField = dbField;
-    }
+		@Override
+		public BiFunction<UpdateAuthRQ, Integration, Integration> getFromResourceMapper() {
+			return LdapConverter.UPDATE_FROM_REQUEST;
+		}
 
-    public abstract Optional<AbstractAuthConfig> get(AuthConfigEntity entity);
+		@Override
+		public Function<Integration, ActiveDirectoryResource> getToResourceMapper() {
+			return ActiveDirectoryConverter.TO_RESOURCE;
+		}
+	},
+	LDAP("ldap") {
+		@Override
+		public Optional<Integration> get(Integration entity) {
+			return ofNullable(entity);
+		}
 
-    public String getId() {
-        return id;
-    }
+		@Override
+		public AuthIntegrationBuilder getBuilder() {
+			return new LdapBuilder();
+		}
 
-    public String getDbField() {
-        return dbField;
-    }
+		@Override
+		public BiFunction<UpdateAuthRQ, Integration, Integration> getFromResourceMapper() {
+			return LdapConverter.UPDATE_FROM_REQUEST;
+		}
 
-    public static Optional<AuthIntegrationType> fromId(String id) {
-        return Arrays.stream(values()).filter(it -> it.id.equalsIgnoreCase(id)).findAny();
-    }
+		@Override
+		public Function<Integration, LdapResource> getToResourceMapper() {
+			return LdapConverter.TO_RESOURCE;
+		}
+	},
+	SAML("saml") {
+		@Override
+		public Optional<Integration> get(Integration entity) {
+			return ofNullable(entity);
+		}
 
-    @Override
-    public String toString() {
-        return this.id;
-    }
+		@Override
+		public AuthIntegrationBuilder getBuilder() {
+			return new SamlBuilder();
+		}
+
+		@Override
+		public BiFunction<UpdateAuthRQ, Integration, Integration> getFromResourceMapper() {
+			return SamlConverter.UPDATE_FROM_REQUEST;
+		}
+
+		@Override
+		public Function<Integration, SamlResource> getToResourceMapper() {
+			return SamlConverter.TO_RESOURCE;
+		}
+	};
+
+	private String name;
+
+	AuthIntegrationType(String name) {
+		this.name = name;
+	}
+
+	public abstract Optional<Integration> get(Integration entity);
+
+	public abstract AuthIntegrationBuilder getBuilder();
+
+	public abstract BiFunction<UpdateAuthRQ, Integration, Integration> getFromResourceMapper();
+
+	public abstract Function<Integration, ? extends AbstractAuthResource> getToResourceMapper();
+
+	public String getName() {
+		return name;
+	}
+
+	public static Optional<AuthIntegrationType> fromId(String id) {
+		return Arrays.stream(values()).filter(it -> it.name.equalsIgnoreCase(id)).findAny();
+	}
+
+	@Override
+	public String toString() {
+		return this.name;
+	}
 }

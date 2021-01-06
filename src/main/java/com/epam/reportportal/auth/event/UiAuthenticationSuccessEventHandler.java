@@ -1,31 +1,38 @@
 /*
- * Copyright 2016 EPAM Systems
+ * Copyright 2019 EPAM Systems
  *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This file is part of EPAM Report Portal.
- * https://github.com/reportportal/service-authorization
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Report Portal is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Report Portal is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Report Portal.  If not, see <http://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package com.epam.reportportal.auth.event;
 
-import com.epam.ta.reportportal.database.dao.UserRepository;
+import com.epam.reportportal.auth.integration.saml.ReportPortalSamlAuthentication;
+import com.epam.ta.reportportal.commons.ReportPortalUser;
+import com.epam.ta.reportportal.dao.UserRepository;
+import com.epam.ta.reportportal.entity.project.Project;
+import com.epam.ta.reportportal.entity.user.User;
+import com.epam.ta.reportportal.exception.ReportPortalException;
+import com.epam.ta.reportportal.util.PersonalProjectService;
+import com.epam.ta.reportportal.ws.model.ErrorType;
+import org.apache.commons.collections4.MapUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationListener;
+import org.springframework.context.event.EventListener;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Date;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Updates Last Login field in database User entity
@@ -33,13 +40,39 @@ import java.util.Date;
  * @author Andrei Varabyeu
  */
 @Component
-public class UiAuthenticationSuccessEventHandler implements ApplicationListener<UiUserSignedInEvent> {
+public class UiAuthenticationSuccessEventHandler {
 
-    @Autowired
-    private UserRepository userRepository;
+	private UserRepository userRepository;
 
-    @Override
-    public void onApplicationEvent(UiUserSignedInEvent event) {
-        userRepository.updateLastLoginDate(event.getAuthentication().getName(), new Date(event.getTimestamp()));
-    }
+	private PersonalProjectService personalProjectService;
+
+	@Autowired
+	public UiAuthenticationSuccessEventHandler(UserRepository userRepository, PersonalProjectService personalProjectService) {
+		this.userRepository = userRepository;
+		this.personalProjectService = personalProjectService;
+	}
+
+	@EventListener
+	@Transactional
+	public void onApplicationEvent(UiUserSignedInEvent event) {
+		String username = event.getAuthentication().getName();
+		userRepository.updateLastLoginDate(LocalDateTime.ofInstant(Instant.ofEpochMilli(event.getTimestamp()), ZoneOffset.UTC), username);
+
+		if (MapUtils.isEmpty(acquireUser(event.getAuthentication()).getProjectDetails())) {
+			User user = userRepository.findByLogin(username)
+					.orElseThrow(() -> new ReportPortalException(ErrorType.USER_NOT_FOUND, username));
+			Project project = personalProjectService.generatePersonalProject(user);
+			user.getProjects().addAll(project.getUsers());
+		}
+	}
+
+	private ReportPortalUser acquireUser(Authentication authentication) {
+		if (authentication instanceof ReportPortalSamlAuthentication) {
+			ReportPortalSamlAuthentication rpAuthentication = (ReportPortalSamlAuthentication) authentication;
+			return userRepository.findUserDetails(rpAuthentication.getPrincipal())
+					.orElseThrow(() -> new ReportPortalException(ErrorType.USER_NOT_FOUND, rpAuthentication.getPrincipal()));
+		} else {
+			return (ReportPortalUser) authentication.getPrincipal();
+		}
+	}
 }

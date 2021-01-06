@@ -1,21 +1,32 @@
-FROM openjdk:8-jre-alpine
+FROM adoptopenjdk:11-jdk-hotspot-bionic as builder
 
-MAINTAINER Andrei Varabyeu <andrei_varabyeu@epam.com>
-LABEL version="@version@"
-LABEL description="@description@"
+WORKDIR /usr/src/reportportal
 
-ENV JAVA_OPTS="-Xmx512m -Djava.security.egd=file:/dev/./urandom"
-ENV JAVA_APP=/app.jar
+COPY gradle/ ./gradle
+COPY gradlew .
+RUN ./gradlew wrapper
 
-RUN echo $'#!/bin/sh \n\
-exec java $JAVA_OPTS -jar $JAVA_APP' > /start.sh && chmod +x /start.sh
+COPY project-properties.gradle build.gradle gradlew settings.gradle gradle.properties ./
+RUN ./gradlew resolveDependencies --stacktrace
 
-VOLUME /tmp
-ADD lib /lib
+COPY . ./
+RUN ./gradlew build --stacktrace -P gcp
 
-ADD @name@-@version@.jar app.jar
+FROM openjdk:11-jre-slim
+LABEL maintainer="Andrei Varabyeu <andrei_varabyeu@epam.com>"
 
-RUN sh -c 'touch /app.jar'
+RUN echo '#!/bin/sh \n exec java ${JAVA_OPTS} -jar ${APP_FILE}' > /start.sh && \
+    chmod +x /start.sh
+
+ENV JAVA_OPTS="-Xmx1g -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp -Djava.security.egd=file:/dev/./urandom"
+ENV APP_FILE=/app.jar
+
+VOLUME ["/tmp"]
+
+COPY --from=builder /usr/src/reportportal/build/libs/app.jar $APP_FILE
+
+RUN sh -c "touch $APP_FILE"
+
 EXPOSE 8080
 
 ENTRYPOINT ["/start.sh"]

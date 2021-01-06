@@ -1,41 +1,42 @@
 /*
- * Copyright 2017 EPAM Systems
+ * Copyright 2019 EPAM Systems
  *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This file is part of EPAM Report Portal.
- * https://github.com/reportportal/service-authorization
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Report Portal is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Report Portal is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Report Portal.  If not, see <http://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package com.epam.reportportal.auth;
 
-import com.epam.reportportal.auth.store.AuthConfigRepository;
+import com.epam.reportportal.auth.event.UiUserSignedInEvent;
+import com.epam.ta.reportportal.dao.IntegrationRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.stereotype.Component;
 
 /**
  * Dynamic (enableable) auth provider
  *
  * @author Andrei Varabyeu
  */
+@Component
 public abstract class EnableableAuthProvider implements AuthenticationProvider {
 
-	protected final AuthConfigRepository authConfigRepository;
+	protected final IntegrationRepository integrationRepository;
+	protected final ApplicationEventPublisher eventPublisher;
 
-	protected EnableableAuthProvider(AuthConfigRepository authConfigRepository) {
-		this.authConfigRepository = authConfigRepository;
+	public EnableableAuthProvider(IntegrationRepository integrationRepository, ApplicationEventPublisher eventPublisher) {
+		this.integrationRepository = integrationRepository;
+		this.eventPublisher = eventPublisher;
 	}
 
 	protected abstract boolean isEnabled();
@@ -43,8 +44,14 @@ public abstract class EnableableAuthProvider implements AuthenticationProvider {
 	protected abstract AuthenticationProvider getDelegate();
 
 	@Override
-	public final Authentication authenticate(Authentication authentication) throws AuthenticationException {
-		return isEnabled() ? getDelegate().authenticate(authentication) : null;
+	public Authentication authenticate(Authentication authentication) throws AuthenticationException {
+		if (isEnabled()) {
+			Authentication auth = getDelegate().authenticate(authentication);
+			eventPublisher.publishEvent(new UiUserSignedInEvent(auth));
+			return auth;
+		} else {
+			return null;
+		}
 	}
 
 	@Override
